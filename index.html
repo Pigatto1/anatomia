@@ -236,6 +236,28 @@
 }
 .auth-note{margin-top:10px;color:var(--text-sec);font-size:0.85rem;line-height:1.4;}
 
+
+/* =========================
+   CHARTS (v3)
+   ========================= */
+.chart-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;}
+.chart-tabs{display:flex;gap:8px;align-items:center;}
+.mini-tab{
+  padding:10px 12px;border-radius:14px;border:1px solid rgba(0,0,0,0.08);
+  background:rgba(255,255,255,0.7);cursor:pointer;font-weight:900;
+}
+.mini-tab.active{background:rgba(0,122,255,0.12);border-color:rgba(0,122,255,0.22);color:var(--primary);}
+.legend-row{display:flex;gap:10px;flex-wrap:wrap;color:var(--text-sec);font-weight:800;font-size:0.85rem;margin-top:8px;}
+.legend-dot{width:10px;height:10px;border-radius:999px;background:rgba(0,0,0,0.55);display:inline-block;margin-right:6px;}
+.module-list{margin-top:10px;display:grid;grid-template-columns:1fr;gap:8px;max-height:220px;overflow:auto;padding-right:4px;}
+@media (min-width:700px){ .module-list{grid-template-columns:1fr 1fr;} }
+.module-item{
+  background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);
+  border-radius:14px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;
+}
+.module-item .name{font-weight:900;}
+.module-item .val{font-weight:900;color:var(--primary);}
+
 </style>
 </head>
 <body>
@@ -298,7 +320,16 @@
       <div class="label">media totale</div>
     </div>
 
-    <div class="canvas-wrap">
+    
+    <div class="chart-toolbar">
+      <div class="chart-tabs" aria-label="Tipo grafico">
+        <button id="tab-line" class="mini-tab active" onclick="setProgressChartType('line')">Linea</button>
+        <button id="tab-bar" class="mini-tab" onclick="setProgressChartType('bar')">Istogramma</button>
+      </div>
+      <div class="small" style="color:var(--text-sec);font-weight:900;">Ultimi 30 quiz</div>
+    </div>
+
+<div class="canvas-wrap">
       <canvas id="progressChart" height="110"></canvas>
     </div>
   </div>
@@ -318,6 +349,19 @@
     </div>
   </div>
 </div>
+
+<div class="card" id="module-stats-card" style="margin-bottom:20px; display:none;">
+  <div class="card-title">Accuratezza per modulo</div>
+  <p class="card-sub">Istogramma calcolato da <strong>domande viste</strong> (question_progress).</p>
+  <div class="canvas-wrap">
+    <canvas id="moduleChart" height="160"></canvas>
+  </div>
+  <div class="legend-row">
+    <span><span class="legend-dot"></span> % corrette per modulo</span>
+  </div>
+  <div id="moduleList" class="module-list"></div>
+</div>
+
 
 <div class="card" style="margin-bottom:20px;">
   <div class="card-title">Cerca per argomento</div>
@@ -1945,7 +1989,7 @@
        AUTH + STORAGE (Supabase) - NEW
        ==================================================================== */
 
-    // 👉 Incolla qui i dati del tuo progetto Supabase
+
     const SUPABASE_URL = "https://gdbkmyhwxiwmntanhlnn.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdkYmtteWh3eGl3bW50YW5obG5uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1Nzg3NTEsImV4cCI6MjA4MjE1NDc1MX0.Y6LXz6C6TsBPjLv0TDQid_uCdENWJdK7JoBe1o4hPM8";
 
@@ -2160,7 +2204,10 @@
             document.getElementById('wrong-count').innerText = '—';
             document.getElementById('oldest-label').innerText = '—';
             document.getElementById('overall-avg').innerText = '—%';
-            drawChart([]);
+            drawProgressChart([]);
+            const mc = document.getElementById('module-stats-card');
+            if (mc) mc.style.display = 'none';
+
         }
     }
 
@@ -2199,18 +2246,44 @@
     }
 
     // ===== Dashboard + chart =====
-    function drawChart(points) {
-        const canvas = document.getElementById('progressChart');
-        if (!canvas) return;
+        // ===== Charts (HiDPI + line/bar) =====
+    let progressChartType = "line"; // line | bar
+
+    function setProgressChartType(type) {
+        progressChartType = type;
+        const a = document.getElementById('tab-line');
+        const b = document.getElementById('tab-bar');
+        if (a && b) {
+            a.classList.toggle('active', type === 'line');
+            b.classList.toggle('active', type === 'bar');
+        }
+        // ridisegna con i dati già calcolati
+        drawProgressChart(window.__progress_points || []);
+    }
+
+    function setupCanvas(canvas, cssHeight) {
         const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        const w = Math.max(1, Math.floor(rect.width));
+        const h = Math.max(1, Math.floor(cssHeight));
 
-        // adattamento width
-        const w = canvas.width = canvas.clientWidth;
-        const h = canvas.height; // keep attr height
+        canvas.style.height = h + "px";
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
 
+        // reset transform + scale
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.scale(dpr, dpr);
+
+        return { ctx, w, h };
+    }
+
+    function clearAndGrid(ctx, w, h) {
         ctx.clearRect(0, 0, w, h);
 
-        ctx.globalAlpha = 0.20;
+        // grid
+        ctx.globalAlpha = 0.18;
         for (let i = 0; i <= 4; i++) {
             const y = (h / 4) * i;
             ctx.beginPath();
@@ -2218,6 +2291,113 @@
             ctx.lineTo(w, y);
             ctx.stroke();
         }
+        ctx.globalAlpha = 1;
+    }
+
+    function drawProgressChart(points) {
+        window.__progress_points = points || [];
+        const canvas = document.getElementById('progressChart');
+        if (!canvas) return;
+
+        const { ctx, w, h } = setupCanvas(canvas, 110);
+        clearAndGrid(ctx, w, h);
+
+        if (!points || points.length === 0) {
+            // hint
+            ctx.globalAlpha = 0.6;
+            ctx.fillText("Fai un quiz per iniziare a riempire il grafico.", 10, h / 2);
+            ctx.globalAlpha = 1;
+            return;
+        }
+
+        const padX = 10;
+        const padY = 12;
+
+        if (progressChartType === "bar") {
+            // bars: last N quiz percentages
+            const maxBars = Math.min(points.length, 30);
+            const data = points.slice(-maxBars);
+            const n = data.length;
+            const barW = (w - padX * 2) / n;
+
+            for (let i = 0; i < n; i++) {
+                const v = data[i];
+                const x = padX + i * barW;
+                const barH = (v / 100) * (h - padY * 2);
+                const y = (h - padY) - barH;
+
+                ctx.globalAlpha = 0.65;
+                ctx.fillRect(x + 1, y, Math.max(2, barW - 2), barH);
+                ctx.globalAlpha = 1;
+            }
+            return;
+        }
+
+        // line chart
+        const xs = (i) => padX + (points.length === 1 ? 0 : (i / (points.length - 1)) * (w - padX * 2));
+        const ys = (v) => padY + (1 - (v / 100)) * (h - padY * 2);
+
+        ctx.beginPath();
+        points.forEach((p, i) => {
+            const x = xs(i);
+            const y = ys(p);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        points.forEach((p, i) => {
+            const x = xs(i);
+            const y = ys(p);
+            ctx.beginPath();
+            ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+
+    function drawModuleHistogram(labels, values) {
+        const card = document.getElementById('module-stats-card');
+        const canvas = document.getElementById('moduleChart');
+        const list = document.getElementById('moduleList');
+        if (!canvas || !card) return;
+
+        if (!labels || labels.length === 0) {
+            card.style.display = 'none';
+            if (list) list.innerHTML = '';
+            return;
+        }
+
+        card.style.display = '';
+        const { ctx, w, h } = setupCanvas(canvas, 160);
+        clearAndGrid(ctx, w, h);
+
+        const padX = 12;
+        const padY = 16;
+        const n = labels.length;
+        const barW = (w - padX * 2) / n;
+
+        for (let i = 0; i < n; i++) {
+            const v = values[i];
+            const x = padX + i * barW;
+            const barH = (v / 100) * (h - padY * 2);
+            const y = (h - padY) - barH;
+
+            ctx.globalAlpha = 0.65;
+            ctx.fillRect(x + 2, y, Math.max(2, barW - 4), barH);
+            ctx.globalAlpha = 1;
+        }
+
+        // list under the chart
+        if (list) {
+            list.innerHTML = '';
+            for (let i = 0; i < labels.length; i++) {
+                const div = document.createElement('div');
+                div.className = 'module-item';
+                div.innerHTML = `<div class="name">${labels[i]}</div><div class="val">${values[i]}%</div>`;
+                list.appendChild(div);
+            }
+        }
+    }
         ctx.globalAlpha = 1;
 
         if (!points || points.length === 0) return;
@@ -2265,7 +2445,7 @@
             document.getElementById('overall-avg').innerText = '—%';
         }
 
-        drawChart(percents);
+        drawProgressChart(percents);
 
         const { count: wrongCount } = await supa
             .from('question_progress')
@@ -2661,6 +2841,11 @@ switchView('home');
 
     // listener: se cambia sessione (login/logout) aggiorna UI
     supa.auth.onAuthStateChange((_event, _session) => { refreshAuthState(); });
+
+    window.addEventListener('resize', () => {
+        // ridisegna i grafici (se presenti)
+        try { drawProgressChart(window.__progress_points || []); } catch(e) {}
+    });
 </script>
 </body>
 </html>
